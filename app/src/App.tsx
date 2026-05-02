@@ -5,8 +5,9 @@ function App() {
   const [digits, setDigits] = useState(6);
   const [period, setPeriod] = useState(30);
   const [algorithm, setAlgorithm] = useState('SHA-1');
-  const [otp, setOtp] = useState('----');
-  const [prevOtp, setPrevOtp] = useState('----');
+  const [otp, setOtp] = useState('------');
+  const [prevOtp, setPrevOtp] = useState('------');
+  const [nextOtp, setNextOtp] = useState('------');
   const [remaining, setRemaining] = useState(30);
   const [copyIcon, setCopyIcon] = useState('📋');
 
@@ -29,26 +30,31 @@ function App() {
       const backendUrl = import.meta.env.VITE_OPTIONAL_BACKEND_URL || '';
       const baseUrl = backendUrl ? backendUrl : '';
 
-      const [currentResponse, prevResponse] = await Promise.all([
+      const [currentResponse, prevResponse, nextResponse] = await Promise.all([
         fetch(
           `${baseUrl}/generate-totp?key=${encodeURIComponent(key)}&digits=${digits}&period=${period}&algorithm=${algorithm}`
         ),
         fetch(
           `${baseUrl}/generate-totp?key=${encodeURIComponent(key)}&digits=${digits}&period=${period}&algorithm=${algorithm}&timeOffset=-30`
         ),
+        fetch(
+          `${baseUrl}/generate-totp?key=${encodeURIComponent(key)}&digits=${digits}&period=${period}&algorithm=${algorithm}&timeOffset=30`
+        ),
       ]);
 
-      if (!currentResponse.ok || !prevResponse.ok) {
+      if (!currentResponse.ok || !prevResponse.ok || !nextResponse.ok) {
         throw new Error(`Server error: ${currentResponse.statusText}`);
       }
 
-      const [currentData, prevData] = await Promise.all([
+      const [currentData, prevData, nextData] = await Promise.all([
         currentResponse.json(),
         prevResponse.json(),
+        nextResponse.json(),
       ]);
 
       setOtp(currentData.otp);
       setPrevOtp(prevData.otp);
+      setNextOtp(nextData.otp);
       setRemaining(currentData.remaining);
     } catch (error) {
       console.error('Error fetching OTP:', error);
@@ -163,7 +169,7 @@ function App() {
 
         <div className="text-center mb-4">
           <h3 className="text-xl font-semibold">
-            OTP: <span className="font-mono text-2xl text-blue-600">{otp}</span>
+            Current: <span className="font-mono text-2xl text-blue-600">{otp}</span>
             <button
               onClick={copyToClipboard}
               className="ml-3 text-2xl hover:bg-gray-100 p-1 rounded"
@@ -171,9 +177,14 @@ function App() {
               {copyIcon}
             </button>
           </h3>
-          <p className="text-sm text-gray-500 mt-2">
-            Previous: <span className="font-mono text-lg">{prevOtp}</span>
-          </p>
+          <div className="flex justify-center gap-8 mt-2">
+            <p className="text-sm text-gray-500">
+              Previous: <span className="font-mono text-lg">{prevOtp}</span>
+            </p>
+            <p className="text-sm text-gray-500">
+              Next: <span className="font-mono text-lg">{nextOtp}</span>
+            </p>
+          </div>
         </div>
 
         <div className="mb-4">
