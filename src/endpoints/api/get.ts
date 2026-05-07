@@ -2,6 +2,22 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { generateSync, createGuardrails } from "otplib";
 
+const requestSchema = z.object({
+    key: z.string().min(16, "Key must be at least 16 characters long."),
+    digits: z.coerce.number().int().min(6, "Digits must be between 6 and 8.").max(8, "Digits must be between 6 and 8."),
+    period: z.coerce.number().int().min(10, "Period must be between 10 and 60 seconds.").max(60, "Period must be between 10 and 60 seconds."),
+    algorithm: z.enum(["SHA-1", "SHA-256", "SHA-512"]).default("SHA-1"),
+    timeOffset: z.coerce.number().int().min(-3600, "Time offset must be between -3600 and 3600 seconds.").max(3600, "Time offset must be between -3600 and 3600 seconds.").default(0),
+});
+
+function getErrorMessage(error: unknown): string {
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+
+    return "Unable to generate TOTP with the provided parameters.";
+}
+
 export class GenerateTOTPRoute extends OpenAPIRoute {
     schema = {
         tags: ["TOTP"],
@@ -69,61 +85,55 @@ export class GenerateTOTPRoute extends OpenAPIRoute {
     };
 
     async handle(c) {
+        const url = new URL(c.req.url);
+        const rawKey = url.searchParams.get("key") ?? "";
+        const cleanedKey = rawKey.replace(/\s+/g, "");
+
+        const parsedParams = requestSchema.safeParse({
+            key: cleanedKey,
+            digits: url.searchParams.get("digits") ?? "6",
+            period: url.searchParams.get("period") ?? "30",
+            algorithm: url.searchParams.get("algorithm") ?? "SHA-1",
+            timeOffset: url.searchParams.get("timeOffset") ?? "0",
+        });
+
+        if (!parsedParams.success) {
+            return c.json({
+                error: "Invalid request parameters",
+                details: z.treeifyError(parsedParams.error),
+            }, 400);
+        }
+
         try {
-            const url = new URL(c.req.url);
-
-            // 解析并校验参数
-            const schema = z.object({
-                key: z.string().min(16, "Key must be at least 16 characters long."),
-                digits: z.string().regex(/^\d+$/).default("6"),
-                period: z.string().regex(/^\d+$/).default("30"),
-                algorithm: z.string().regex(/^(SHA-1|SHA-256|SHA-512)$/).default("SHA-1"),
-                timeOffset: z.string().regex(/^-?\d+$/).default("0"),
-            });
-
-            // 预处理 key 参数：去除所有空格
-            const rawKey = url.searchParams.get("key") ?? "";
-            const cleanedKey = rawKey.replace(/\s+/g, "");
-
-            const parsedParams = schema.safeParse({
-                key: cleanedKey,
-                digits: url.searchParams.get("digits") ?? "6",
-                period: url.searchParams.get("period") ?? "30",
-                algorithm: url.searchParams.get("algorithm") ?? "SHA-1",
-                timeOffset: url.searchParams.get("timeOffset") ?? "0",
-            });
-
-            if (!parsedParams.success) {
-                return c.json({ error: "Invalid request parameters", details: parsedParams.error.format() }, 400);
-            }
-
             const { key, digits, period, algorithm, timeOffset } = parsedParams.data;
-            const digitsNum = parseInt(digits, 10);
-            const periodNum = parseInt(period, 10);
-            const timeOffsetNum = parseInt(timeOffset, 10);
 
-            // 将算法名称转换为 otplib 支持的格式（去掉连字符并转换为小写）
             const normalizedAlgorithm = algorithm.replace("-", "").toLowerCase() as "sha1" | "sha256" | "sha512";
-
-            // 生成 TOTP，应用时间偏移
-            const adjustedTime = Math.floor((Date.now() + (timeOffsetNum * 1000)) / 1000);
+            const adjustedEpoch = Math.floor((Date.now() + (timeOffset * 1000)) / 1000);
 
             const otp = generateSync({
                 secret: key,
-                digits: digitsNum,
-                period: periodNum,
+                digits,
+                period,
                 algorithm: normalizedAlgorithm,
-                epoch: adjustedTime,
+                epoch: adjustedEpoch,
                 guardrails: createGuardrails({ MIN_SECRET_BYTES: 1 }),
             });
 
-            // 计算剩余时间
             const currentTime = Math.floor(Date.now() / 1000);
-            const remaining = periodNum - (currentTime % periodNum);
+            const remaining = period - (currentTime % period);
 
             return c.json({ otp, remaining });
         } catch (error) {
+            const message = getErrorMessage(error);
             console.error("Error generating TOTP:", error);
+
+            if (/secret|token|key|algorithm|digits|period|epoch|options/i.test(message)) {
+                return c.json({
+                    error: "Unable to generate TOTP with the provided parameters",
+                    details: message,
+                }, 400);
+            }
+
             return c.json({ error: "Internal Server Error" }, 500);
         }
     }
